@@ -1,0 +1,13 @@
+# Data
+Data/
+
+# dbt
+bgd_dbt/target/
+bgd_dbt/logs/
+bgd_dbt/dbt_packages/
+.dbt-env/
+
+# Env & OS
+.env
+.DS_Store
+__pycache__/
