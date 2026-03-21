@@ -45,3 +45,46 @@ The **Gold** schema transforms the structured silver facts into a classic Kimbal
 - **Aggregations:** It groups by `sale_year` (extracted from `transfer_date`), `urban_rural_flag`, `property_type`, and `new_build`.
 - **Measures computed:** `total_transactions`, `total_sales_volume`, `average_price`, `min_price`, and `max_price`. 
 - This mart is designed to directly answer business questions about housing market behaviors in urban vs. rural settings out-of-the-box.
+
+---
+
+## 3. Running the Project with Docker
+
+This project includes a `docker-compose.yml` file to spin up a local PostgreSQL data warehouse and pgAdmin for exploration. The initial raw data is loaded automatically into the `raw` schema using initialization scripts located in `docker-entrypoint-initdb.d/`.
+
+### Prerequisites
+- Docker and Docker Compose installed.
+- Raw CSV/data files must be correctly placed in the `Data/` directory as mapped in the compose volumes.
+
+### Steps to Run
+
+1. **Start the Database and pgAdmin** in detached mode:
+   ```bash
+   docker compose up -d
+   ```
+   *(Note: The first startup may take a moment while the initialization scripts import the heavy raw data into Postgres).*
+
+2. **Access pgAdmin (Database UI)**:
+   - **URL**: [http://localhost:5050](http://localhost:5050)
+   - **Email**: `admin@admin.com`
+   - **Password**: `admin`
+
+3. **Direct Database Credentials** (for dbt or IDE connections):
+   - **Host**: `localhost`
+   - **Port**: `5432`
+   - **User**: `myuser`
+   - **Password**: `mypassword`
+   - **Database**: `mydatabase`
+
+4. **Run the dbt Pipeline**:
+   Once the database is up and the raw data is loaded, navigate to the dbt project and trigger the transformations (Silver -> Gold):
+   ```bash
+   cd bgd_dbt
+   dbt deps
+   dbt run
+   ```
+
+5. **Stop the environment**:
+   ```bash
+   docker compose down
+   ```
