@@ -9,25 +9,25 @@ WITH source_sales AS (
 
 SELECT 
     transaction_id,
-    -- Fakty
     price,
-    transfer_date,
     
-    -- Klucze wymiarów
+    -- Time key
+    CAST(TO_CHAR(transfer_date, 'YYYYMMDD') AS INTEGER) AS date_key,
+    
+    -- Dimension keys
     normalized_postcode,
     
-    -- Atrybuty transakcji
-    property_type,
-    new_build,
-    tenure,
-    category_type,
+    MD5(
+        COALESCE(property_type, 'NULL') || '|' || 
+        COALESCE(CAST(new_build AS TEXT), 'NULL') || '|' || 
+        COALESCE(tenure, 'NULL') || '|' || 
+        COALESCE(category_type, 'NULL')
+    ) AS property_key,
     
-    -- Metadane
     dbt_updated_at AS silver_updated_at,
     CURRENT_TIMESTAMP AS gold_updated_at
 FROM source_sales
 
 {% if is_incremental() %}
-    -- Jeżeli ładujemy przyrostowo, filtrujemy to, co jest nowe w silver_ppd
     WHERE dbt_updated_at >= (SELECT COALESCE(MAX(silver_updated_at), '1900-01-01') FROM {{ this }})
 {% endif %}

@@ -1,47 +1,40 @@
 {{ config(
-    materialized='table',
-    unique_key='normalized_postcode'
+    materialized='table'
 ) }}
 
 WITH raw_onspd AS (
     SELECT * FROM {{ source('raw', 'onspd') }}
+    WHERE pcds IS NOT NULL AND pcds != ''
 ),
 
-deduplicated_onspd AS (
+scd2_onspd AS (
     SELECT 
+        MD5(REPLACE(UPPER(pcds), ' ', '') || COALESCE(dointr, '')) AS onspd_key,
         pcds AS raw_postcode,
-        -- Taka sama normalizacja jak w PPD dla idealnego JOINA
         REPLACE(UPPER(pcds), ' ', '') AS normalized_postcode,
         
-        -- Kody jednostek statystycznych i terytorialnych
         lsoa21cd,
+        lsoa11cd,
         msoa21cd,
         lad25cd AS lad_code, 
-        
-        -- Współrzędne
         lat AS latitude,
         long AS longitude,
         
-        -- Obsługa duplikatów: bierzemy te, które nie są wygasłe (doterm IS NULL lub puste), 
-        -- a potem te ze statusem najnowszej daty wprowadzenia (dointr)
-        ROW_NUMBER() OVER (
-            PARTITION BY REPLACE(UPPER(pcds), ' ', '') 
-            ORDER BY 
-                CASE WHEN doterm IS NULL OR doterm = '' THEN 1 ELSE 0 END DESC, 
-                dointr DESC
-        ) as rn
+        -- Convert YYYYMM introduction date to a real Date (first day of the month)
+        -- If missing, default to far past
+        CASE 
+            WHEN dointr IS NULL OR dointr = '' THEN '1900-01-01'::DATE
+            ELSE TO_DATE(dointr, 'YYYYMM')
+        END AS valid_from,
+        
+        -- Convert YYYYMM termination date to a real Date (last day of the month)
+        -- If missing, default to far future
+        CASE 
+            WHEN doterm IS NULL OR doterm = '' THEN '2099-12-31'::DATE
+            ELSE (TO_DATE(doterm, 'YYYYMM') + INTERVAL '1 month' - INTERVAL '1 day')::DATE
+        END AS valid_to
+
     FROM raw_onspd
-    -- Wyrzucamy puste kody pocztowe, by nie psuć joina
-    WHERE pcds IS NOT NULL AND pcds != ''
 )
 
-SELECT 
-    raw_postcode,
-    normalized_postcode,
-    lsoa21cd,
-    msoa21cd,
-    lad_code,
-    latitude,
-    longitude
-FROM deduplicated_onspd
-WHERE rn = 1
+SELECT * FROM scd2_onspd

@@ -12,7 +12,6 @@ SELECT
     price,
     transfer_date,
     postcode AS raw_postcode,
-    -- Normalizacja kodu pocztowego: usunięcie spacji i zamiana na wielkie litery
     REPLACE(UPPER(postcode), ' ', '') AS normalized_postcode,
     
     property_type,
@@ -27,18 +26,16 @@ SELECT
     county,
     category_type,
     record_status,
-    -- Dodajemy stempel czasowy, żeby wiedzieć, kiedy dany rekord trafił do Silver (lub kiedy był aktualizowany)
     CURRENT_TIMESTAMP AS dbt_updated_at
 FROM raw_ppd
 
--- Blok inkrementalny (uruchamia się tylko przy kolejnych wywołaniach dbt run, a nie za pierwszym razem)
 {% if is_incremental() %}
 
-  -- Pobieramy z raw.ppd tylko te rekordy, które są nowsze niż najnowszy transfer_date w naszej bazie silver
-  -- LUB opieramy się po prostu na mechanizmie `unique_key='transaction_id'`, 
-  -- który na Postgresie wykona operację UPSERT (czyli zaktualizuje zmienione i wstawi nowe).
+  -- Fetch only records from raw.ppd that are newer than the latest transfer_date in our silver database
+  -- OR simply rely on the `unique_key='transaction_id'` mechanism, 
+  -- which performs an UPSERT operation on Postgres (updating changed records and inserting new ones).
   
-  -- Jeśli chcesz filtrować wolumen danych, żeby nie przetwarzać 30M wierszy, odkomentuj:
+  -- If you want to filter data volume to avoid processing 30M rows, uncomment:
   -- WHERE transfer_date >= (SELECT COALESCE(MAX(transfer_date), '1900-01-01') FROM {{ this }})
 
 {% endif %}

@@ -1,0 +1,12 @@
+bgd_dbt:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      threads: 4
+      host: postgres_db
+      port: 5432
+      user: myuser
+      pass: mypassword
+      dbname: mydatabase
+      schema: public
