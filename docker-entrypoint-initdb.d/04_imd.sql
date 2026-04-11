@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS raw.imd (
     older_population_aged_60_and_over_mid_2015_excluding_prisone TEXT,
     working_age_population_18_59_64_for_use_with_employment_depr TEXT
 );
-
+TRUNCATE TABLE raw.imd;
 COPY raw.imd
 FROM '/Data/File_7_-_All_IoD2019_Scores__Ranks__Deciles_and_Population_Denominators_3.csv'
 DELIMITER ','
