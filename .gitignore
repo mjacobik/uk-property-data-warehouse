@@ -1,13 +1,22 @@
-# Data
+# Data (large CSVs – not tracked by Git)
 Data/
 
-# dbt
+# dbt build artifacts
 bgd_dbt/target/
 bgd_dbt/logs/
 bgd_dbt/dbt_packages/
 .dbt-env/
 
+# Airflow runtime artifacts
+airflow/logs/
+airflow/plugins/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+bgd_dbt/.venv/
+
 # Env & OS
 .env
 .DS_Store
-__pycache__/
