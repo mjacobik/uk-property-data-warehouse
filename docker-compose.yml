@@ -1,6 +1,30 @@
 version: '3.8'
 
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.9.3-python3.10
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://myuser:mypassword@postgres_db:5432/mydatabase
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+    # Connection URI used by DAGs to write data
+    BRONZE_DB_URI: postgresql://myuser:mypassword@postgres_db:5432/mydatabase
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/plugins:/opt/airflow/plugins
+    - ./Data/landing:/opt/airflow/landing   # Landing Zone for reference files
+    - ./bgd_dbt:/opt/airflow/dbt            # dbt project
+    - ./ingest_to_bronze.py:/opt/airflow/scripts/ingest_to_bronze.py
+    - ./requirements.txt:/opt/airflow/scripts/requirements.txt
+  depends_on:
+    postgres:
+      condition: service_healthy
+
 services:
+  # ── PostgreSQL Data Warehouse ──────────────────────────────────────
   postgres:
     image: postgres:15
     container_name: postgres_db
@@ -13,11 +37,17 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
-      - ./data:/Data
+      - ./Data:/Data
       - ./Data/ONSPD_FEB_2026/Data:/ONSPD
       - ./Data:/LSOA
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U myuser -d mydatabase"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
     restart: unless-stopped
 
+  # ── pgAdmin ────────────────────────────────────────────────────────
   pgadmin:
     image: dpage/pgadmin4
     container_name: pgadmin4
@@ -28,6 +58,57 @@ services:
       - "5050:80"
     depends_on:
       - postgres
+    restart: unless-stopped
+
+  # ── Airflow: Database Migration ────────────────────────────────────
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow_init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        pip install --no-cache-dir polars psycopg2-binary adbc-driver-postgresql requests dbt-postgres==1.8.2 &&
+        airflow db migrate &&
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com || true
+    restart: "no"
+
+  # ── Airflow Webserver ──────────────────────────────────────────────
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow_webserver
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        pip install --no-cache-dir polars psycopg2-binary adbc-driver-postgresql requests dbt-postgres==1.8.2 &&
+        airflow webserver --port 8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Airflow Scheduler ──────────────────────────────────────────────
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow_scheduler
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        pip install --no-cache-dir polars psycopg2-binary adbc-driver-postgresql requests dbt-postgres==1.8.2 &&
+        airflow scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 volumes:
