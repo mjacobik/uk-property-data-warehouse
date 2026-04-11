@@ -8,9 +8,9 @@ WITH raw_ruc AS (
 )
 
 SELECT 
-    lsoa21cd,
-    TRIM(lsoa21nm) AS lsoa21nm,
-    TRIM(ruc21cd) AS ruc21cd,
-    TRIM(ruc21nm) AS ruc21nm,
-    TRIM(urban_rural_flag) AS urban_rural_flag
+    "LSOA21CD" AS lsoa21cd,
+    TRIM("LSOA21NM") AS lsoa21nm,
+    TRIM("RUC21CD") AS ruc21cd,
+    TRIM("RUC21NM") AS ruc21nm,
+    TRIM("Urban_rural_flag") AS urban_rural_flag
 FROM raw_ruc
