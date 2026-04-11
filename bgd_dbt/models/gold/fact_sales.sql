@@ -1,10 +1,17 @@
 {{ config(
     materialized='incremental',
-    unique_key='transaction_id'
+    unique_key='transaction_id',
+    post_hook=[
+        "CREATE INDEX IF NOT EXISTS idx_fact_sales_txn ON {{ this }} (transaction_id)",
+        "CREATE INDEX IF NOT EXISTS idx_fact_sales_date ON {{ this }} (date_key)"
+    ]
 ) }}
 
 WITH source_sales AS (
     SELECT * FROM {{ ref('silver_ppd') }}
+    {% if is_incremental() %}
+    WHERE dbt_updated_at > (SELECT COALESCE(MAX(silver_updated_at), '1900-01-01') FROM {{ this }})
+    {% endif %}
 )
 
 SELECT 

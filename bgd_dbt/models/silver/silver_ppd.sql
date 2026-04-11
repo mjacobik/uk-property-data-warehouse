@@ -1,6 +1,7 @@
 {{ config(
     materialized='incremental',
-    unique_key='ppd_hash_key'
+    unique_key='ppd_hash_key',
+    post_hook="CREATE INDEX IF NOT EXISTS idx_silver_ppd_hash ON {{ this }} (ppd_hash_key)"
 ) }}
 
 WITH bronze_ppd AS (

@@ -22,11 +22,10 @@ The project follows a **Medallion Architecture** (Bronze → Silver → Gold) or
 ┌─────────────────────────────────────────────────────────────────┐
 │  Airflow DAG: bgd_pipeline  (runs 25th of each month)           │
 │                                                                 │
-│  1. sense_landing_zone   – FileSensor watches Data/landing/     │
-│  2. ingest_reference_data – Polars Truncate & Load → Bronze     │
-│  3. ingest_ppd            – Polars incremental append → Bronze  │
-│  4. dbt_run_silver        – dbt run  --models silver_ppd        │
-│  5. dbt_test              – dbt test --models silver_ppd        │
+│  1. ingest_reference_data – Polars Truncate & Load → Bronze     │
+│  2. ingest_ppd            – Polars incremental append → Bronze  │
+│  3. dbt_run               – Builds all Silver & Gold dbt models │
+│  4. dbt_test              – dbt test (checks data quality)      │
 └──────────┬──────────────────────────────────────────────────────┘
            ▼
 ┌─────────────────────────────────────────────────────────────────┐
