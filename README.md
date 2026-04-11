@@ -36,6 +36,102 @@ The project follows a **Medallion Architecture** (Bronze → Silver → Gold) or
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+```mermaid
+flowchart TD
+    classDef airflow fill:#e8fdf5,stroke:#017cee,stroke-width:2px,color:#000
+    classDef polars fill:#fff9e6,stroke:#ffb600,stroke-width:2px,color:#000
+    classDef postgres fill:#e8f1fc,stroke:#336791,stroke-width:2px,color:#000
+    classDef source fill:#f4f4f4,stroke:#666,stroke-width:1px,color:#333
+
+    %% ── Sources ────────────────────────────────────────────────────
+    subgraph Sources ["Data Sources"]
+        direction LR
+        GOV["HM Land Registry<br>S3 Bucket"]:::source
+        ONS["ONS / Gov.uk Portals"]:::source
+        LAND["Data/landing/"]:::source
+        ONS -- Manual Download --> LAND
+    end
+
+    %% ── Airflow DAG ────────────────────────────────────────────────
+    subgraph AF ["Airflow DAG: bgd_pipeline — monthly cron"]
+        direction TB
+        T1["1. ingest_reference_data"]:::airflow
+        T2["2. ingest_ppd"]:::airflow
+        T3["3. dbt run"]:::airflow
+        T4["4. dbt test"]:::airflow
+        T1 --> T2 --> T3 --> T4
+    end
+
+    %% ── Polars ─────────────────────────────────────────────────────
+    subgraph PL ["Processing Engine: Polars"]
+        direction LR
+        PRef("Truncate & Load"):::polars
+        PPPD("Incremental Append"):::polars
+    end
+
+    LAND -->|CSVs detected| T1
+    T1 --> PRef
+    GOV -->|HTTP download| T2
+    T2 --> PPPD
+
+    %% ── PostgreSQL ─────────────────────────────────────────────────
+    subgraph DB ["PostgreSQL Data Warehouse"]
+
+        subgraph Bronze ["Bronze — raw schema"]
+            direction LR
+            B_ppd[("raw.ppd")]:::postgres
+            B_onspd[("raw.onspd")]:::postgres
+            B_ruc[("raw.ruc_lsoa_2021")]:::postgres
+            B_imd[("raw.imd")]:::postgres
+        end
+
+        subgraph Silver ["Silver — silver schema"]
+            direction LR
+            S_ppd[("silver_ppd<br>MD5 hash key")]:::postgres
+            S_onspd[("silver_onspd")]:::postgres
+            S_ruc[("silver_ruc")]:::postgres
+            S_imd[("silver_imd")]:::postgres
+        end
+
+        subgraph Gold ["Gold — Kimball Star Schema"]
+            F1[("fact_sales")]:::postgres
+            D1[("dim_date")]:::postgres
+            D2[("dim_property")]:::postgres
+            D3[("dim_location")]:::postgres
+            D4[("dim_geography")]:::postgres
+            M1[("mart_rural_urban_stats")]:::postgres
+        end
+
+    end
+
+    %% Polars → Bronze
+    PRef -->|ADBC| B_onspd
+    PRef -->|ADBC| B_ruc
+    PRef -->|ADBC| B_imd
+    PPPD -->|ADBC| B_ppd
+
+    %% Bronze → Silver (all automated by dbt run)
+    B_ppd --> S_ppd
+    B_onspd --> S_onspd
+    B_ruc --> S_ruc
+    B_imd --> S_imd
+
+    %% Silver → Gold (all automated by dbt run)
+    S_ppd --> F1
+    S_ppd --> D3
+    S_onspd --> D4
+    S_ruc --> D4
+    S_imd --> D4
+
+    %% Star Schema relationships
+    F1 -. date_key .- D1
+    F1 -. property_key .- D2
+    F1 -. location_key .- D3
+    F1 -. normalized_postcode .- D4
+    F1 --> M1
+    D4 --> M1
+```
+
 ### Processing Paradigm
 This is a **batch processing** pipeline. The UK Land Registry publishes Price Paid Data updates roughly on the 20th working day of each month. Airflow is scheduled to run on the **25th** as a safe buffer. Reference datasets (ONSPD, RUC, IMD) update infrequently (quarterly/annually) and are loaded via a file-drop landing zone pattern.
 

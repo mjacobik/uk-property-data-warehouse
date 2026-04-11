@@ -143,12 +143,12 @@ with DAG(
         python_callable=ingest_ppd,
     )
 
-    # 3. dbt run – Silver layer
-    dbt_run_silver = BashOperator(
-        task_id="dbt_run_silver",
+    # 3. dbt run – All layers (Silver + Gold)
+    dbt_run = BashOperator(
+        task_id="dbt_run",
         bash_command=(
             f"cd {DBT_DIR} && "
-            f"dbt run --select silver_ppd --profiles-dir {DBT_PROFILES}"
+            f"dbt run --profiles-dir {DBT_PROFILES}"
         ),
     )
 
@@ -157,9 +157,9 @@ with DAG(
         task_id="dbt_test",
         bash_command=(
             f"cd {DBT_DIR} && "
-            f"dbt test --select silver_ppd --profiles-dir {DBT_PROFILES}"
+            f"dbt test --profiles-dir {DBT_PROFILES}"
         ),
     )
 
     # ── Task dependencies ───────────────────────────────────────────
-    ingest_ref >> ingest_ppd_task >> dbt_run_silver >> dbt_test
+    ingest_ref >> ingest_ppd_task >> dbt_run >> dbt_test
