@@ -23,6 +23,16 @@ SELECT
         COALESCE(tenure, 'NULL') || '|' || 
         COALESCE(category_type, 'NULL')
     ) AS property_key,
+
+    MD5(
+        COALESCE(paon, 'NULL') || '|' || 
+        COALESCE(saon, 'NULL') || '|' || 
+        COALESCE(street, 'NULL') || '|' || 
+        COALESCE(locality, 'NULL') || '|' || 
+        COALESCE(town, 'NULL') || '|' || 
+        COALESCE(district, 'NULL') || '|' || 
+        COALESCE(county, 'NULL')
+    ) AS location_key,
     
     dbt_updated_at AS silver_updated_at,
     CURRENT_TIMESTAMP AS gold_updated_at

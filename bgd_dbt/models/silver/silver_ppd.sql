@@ -1,41 +1,43 @@
 {{ config(
     materialized='incremental',
-    unique_key='transaction_id'
+    unique_key='ppd_hash_key'
 ) }}
 
-WITH raw_ppd AS (
+WITH bronze_ppd AS (
     SELECT * FROM {{ source('raw', 'ppd') }}
 )
 
-SELECT 
+SELECT
+    -- Composite surrogate key to prevent duplicates
+    MD5(
+        transaction_id || '|' ||
+        COALESCE(CAST(price AS TEXT), '') || '|' ||
+        COALESCE(CAST(transfer_date AS TEXT), '')
+    ) AS ppd_hash_key,
+
     transaction_id,
     price,
     transfer_date,
     postcode AS raw_postcode,
-    REPLACE(UPPER(postcode), ' ', '') AS normalized_postcode,
-    
+    REPLACE(UPPER(COALESCE(postcode, '')), ' ', '') AS normalized_postcode,
+
     property_type,
     new_build,
     tenure,
-    paon, 
-    saon, 
-    street, 
-    locality, 
-    town, 
-    district, 
+    paon,
+    saon,
+    street,
+    locality,
+    town,
+    district,
     county,
     category_type,
     record_status,
     CURRENT_TIMESTAMP AS dbt_updated_at
-FROM raw_ppd
+FROM bronze_ppd
 
 {% if is_incremental() %}
-
-  -- Fetch only records from raw.ppd that are newer than the latest transfer_date in our silver database
-  -- OR simply rely on the `unique_key='transaction_id'` mechanism, 
-  -- which performs an UPSERT operation on Postgres (updating changed records and inserting new ones).
-  
-  -- If you want to filter data volume to avoid processing 30M rows, uncomment:
-  -- WHERE transfer_date >= (SELECT COALESCE(MAX(transfer_date), '1900-01-01') FROM {{ this }})
-
+  -- Only process rows whose transfer_date is newer than the latest
+  -- transfer_date already present in the Silver table.
+  WHERE transfer_date > (SELECT COALESCE(MAX(transfer_date), '1900-01-01') FROM {{ this }})
 {% endif %}
