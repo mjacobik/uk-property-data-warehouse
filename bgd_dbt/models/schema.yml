@@ -1,0 +1,45 @@
+version: 2
+
+models:
+  - name: silver_ppd
+    description: "Cleansed Price Paid Data with MD5 composite surrogate key"
+    columns:
+      - name: ppd_hash_key
+        tests:
+          - unique
+          - not_null
+      - name: transaction_id
+        tests:
+          - not_null
+
+  - name: fact_sales
+    description: "Incremental fact table for property sales representing the core of the Gold layer"
+    columns:
+      - name: transaction_id
+        tests:
+          - unique
+          - not_null
+      - name: location_key
+        tests:
+          - not_null
+      - name: property_key
+        tests:
+          - not_null
+      - name: date_key
+        tests:
+          - not_null
+
+  - name: dim_date
+    description: "Date spine dimension"
+    columns:
+      - name: date_key
+        tests:
+          - unique
+          - not_null
+
+  - name: mart_rural_urban_stats
+    description: "Aggregated reporting mart for rural/urban analysis"
+    columns:
+      - name: sale_year
+        tests:
+          - not_null

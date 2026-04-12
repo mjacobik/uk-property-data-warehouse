@@ -68,7 +68,7 @@ flowchart TD
         PPPD("Incremental Append"):::polars
     end
 
-    LAND -->|CSVs detected| T1
+    LAND -.->|Checks for new CSVs| T1
     T1 --> PRef
     GOV -->|HTTP download| T2
     T2 --> PPPD
@@ -145,6 +145,7 @@ BGD/
 │       └── bgd_pipeline.py          # Airflow DAG (orchestration logic)
 ├── bgd_dbt/
 │   ├── models/
+│   │   ├── schema.yml                # dbt data quality constraints (11 tests)
 │   │   ├── silver/                   # Cleansing & standardization layer
 │   │   │   ├── silver_ppd.sql        # Incremental with MD5 hash key
 │   │   │   ├── silver_onspd.sql
@@ -193,6 +194,9 @@ BGD/
 - **`dim_date`**: Date spine from 1990 to 2030.
 - **`fact_sales`**: Incremental transaction fact with foreign keys to all dimensions.
 - **`mart_rural_urban_stats`**: Pre-aggregated data mart for BI dashboarding.
+
+### 3. Data Quality (dbt test)
+- **Constraints**: Enforces 11 data quality rules (like `unique` and `not_null`) via `schema.yml` against critical keys (e.g., `transaction_id`, `ppd_hash_key`). Runs automatically at the end of the Airflow cycle.
 
 ---
 
