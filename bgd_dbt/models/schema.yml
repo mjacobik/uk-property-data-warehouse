@@ -2,14 +2,11 @@ version: 2
 
 models:
   - name: silver_ppd
-    description: "Cleansed Price Paid Data with MD5 composite surrogate key"
+    description: "Cleansed Price Paid Data with normalized postcodes and incremental loading"
     columns:
-      - name: ppd_hash_key
-        tests:
-          - unique
-          - not_null
       - name: transaction_id
         tests:
+          - unique
           - not_null
 
   - name: fact_sales

@@ -1,7 +1,7 @@
 {{ config(
     materialized='incremental',
-    unique_key='ppd_hash_key',
-    post_hook="CREATE INDEX IF NOT EXISTS idx_silver_ppd_hash ON {{ this }} (ppd_hash_key)"
+    unique_key='transaction_id',
+    post_hook="CREATE INDEX IF NOT EXISTS idx_silver_ppd_txn ON {{ this }} (transaction_id)"
 ) }}
 
 WITH bronze_ppd AS (
@@ -9,13 +9,7 @@ WITH bronze_ppd AS (
 )
 
 SELECT
-    -- Composite surrogate key to prevent duplicates
-    MD5(
-        transaction_id || '|' ||
-        COALESCE(CAST(price AS TEXT), '') || '|' ||
-        COALESCE(CAST(transfer_date AS TEXT), '')
-    ) AS ppd_hash_key,
-
+    -- Natural primary key assigned by the UK Land Registry
     transaction_id,
     price,
     transfer_date,

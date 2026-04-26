@@ -2,12 +2,13 @@
 PPD Kafka Consumer → Bronze Layer
 ==================================
 Subscribes to the Kafka topic `ppd.raw`, buffers incoming JSON messages into
-a Polars DataFrame, and bulk-inserts them into PostgreSQL `raw.ppd` via ADBC
-(Arrow Database Connectivity) once the buffer reaches a configurable threshold.
+a Polars DataFrame, casts them to match the `raw.ppd` schema, and upserts
+them into PostgreSQL via psycopg2 `INSERT ... ON CONFLICT (transaction_id)
+DO UPDATE` once the buffer reaches a configurable threshold.
 
 Kafka offsets are committed only **after** a successful DB write, providing
-at-least-once delivery semantics (duplicates in Bronze are handled by the dbt
-Silver incremental model's MD5 hash key).
+at-least-once delivery semantics. Duplicate messages are handled gracefully
+by the upsert — existing rows are updated in place rather than rejected.
 
 Usage:
   python kafka/ppd_consumer.py --mode incremental

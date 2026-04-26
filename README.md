@@ -118,7 +118,7 @@ flowchart TD
     PRef -->|ADBC| B_onspd
     PRef -->|ADBC| B_ruc
     PRef -->|ADBC| B_imd
-    PCons -->|ADBC| B_ppd
+    PCons -->|psycopg2| B_ppd
 
     %% Bronze → Silver (all automated by dbt run)
     B_ppd --> S_ppd
@@ -183,7 +183,7 @@ BGD/
 │   └── 04_imd.sql
 ├── kafka/
 │   ├── ppd_producer.py               # Polars downloads PPD → publishes to Kafka
-│   └── ppd_consumer.py               # Consumes Kafka topic → bulk inserts via ADBC
+│   └── ppd_consumer.py               # Consumes Kafka topic → upserts via psycopg2
 ├── docker-compose.yml                # Postgres + pgAdmin + Airflow + Kafka + Zookeeper
 ├── ingest_to_bronze.py               # Polars reference data ingestion (landing zone)
 ├── requirements.txt
@@ -196,7 +196,7 @@ BGD/
 ## Medallion Layers (dbt)
 
 ### 1. Silver Layer (Staging & Cleansing)
-- **`silver_ppd`**: Normalizes postcodes, generates composite MD5 hash keys, runs incrementally (only processes rows with `transfer_date` newer than the current Silver max).
+- **`silver_ppd`**: Normalizes postcodes, uses the Land Registry's natural `transaction_id` UUID as the incremental unique key, runs incrementally (only processes rows with `transfer_date` newer than the current Silver max).
 - **`silver_onspd`**: Deduplicates postcodes, extracts coordinates and LSOA codes (2011 & 2021).
 - **`silver_ruc`**: Standardizes rural/urban classification attributes.
 - **`silver_imd`**: Casts string IMD matrices into numeric scores and deciles.
@@ -210,7 +210,7 @@ BGD/
 - **`mart_rural_urban_stats`**: Pre-aggregated data mart for BI dashboarding.
 
 ### 3. Data Quality (dbt test)
-- **Constraints**: Enforces 11 data quality rules (like `unique` and `not_null`) via `schema.yml` against critical keys (e.g., `transaction_id`, `ppd_hash_key`). Runs automatically at the end of the Airflow cycle.
+- **Constraints**: Enforces data quality rules via `schema.yml` — `transaction_id` is tested for `unique` and `not_null` in both `silver_ppd` and `fact_sales`. Runs automatically at the end of the Airflow cycle.
 
 ---
 

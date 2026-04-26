@@ -4,7 +4,7 @@ BGD Property Data Warehouse – Airflow DAG
 Orchestrates:
   1. ingest_reference_data  – Polars Truncate & Load reference CSVs into Bronze
   2. produce_ppd_to_kafka   – Downloads PPD from UK Gov and publishes to Kafka topic `ppd.raw`
-  3. consume_ppd_from_kafka – Reads from `ppd.raw` and bulk-inserts into Bronze via Polars + ADBC
+  3. consume_ppd_from_kafka – Reads from `ppd.raw` and upserts into Bronze via psycopg2
   4. dbt_run                – dbt run  (all Silver + Gold models)
   5. dbt_test               – dbt test (data quality constraints)
 
