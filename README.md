@@ -22,10 +22,11 @@ The project follows a **Medallion Architecture** (Bronze → Silver → Gold) or
 ┌─────────────────────────────────────────────────────────────────┐
 │  Airflow DAG: bgd_pipeline  (runs 25th of each month)           │
 │                                                                 │
-│  1. ingest_reference_data – Polars Truncate & Load → Bronze     │
-│  2. ingest_ppd            – Polars incremental append → Bronze  │
-│  3. dbt_run               – Builds all Silver & Gold dbt models │
-│  4. dbt_test              – dbt test (checks data quality)      │
+│  1. ingest_reference_data │ Polars Truncate & Load → Bronze     │
+│  2. produce_ppd_to_kafka  │ Polars + Kafka Producer → ppd.raw   │
+│  3. consume_ppd_from_kafka│ Kafka Consumer → psycopg2 → Bronze  │
+│  4. dbt_run               │ Builds all Silver & Gold dbt models │
+│  5. dbt_test              │ dbt test (checks data quality)      │
 └──────────┬──────────────────────────────────────────────────────┘
            ▼
 ┌─────────────────────────────────────────────────────────────────┐
@@ -97,7 +98,7 @@ flowchart TD
 
         subgraph Silver ["Silver — silver schema"]
             direction LR
-            S_ppd[("silver_ppd<br>MD5 hash key")]:::postgres
+            S_ppd[("silver_ppd")]:::postgres
             S_onspd[("silver_onspd")]:::postgres
             S_ruc[("silver_ruc")]:::postgres
             S_imd[("silver_imd")]:::postgres
@@ -158,7 +159,7 @@ BGD/
 │   ├── models/
 │   │   ├── schema.yml                # dbt data quality constraints (11 tests)
 │   │   ├── silver/                   # Cleansing & standardization layer
-│   │   │   ├── silver_ppd.sql        # Incremental with MD5 hash key
+│   │   │   ├── silver_ppd.sql        # Incremental, unique on transaction_id
 │   │   │   ├── silver_onspd.sql
 │   │   │   ├── silver_ruc.sql
 │   │   │   └── silver_imd.sql
