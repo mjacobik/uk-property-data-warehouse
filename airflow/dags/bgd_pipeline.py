@@ -2,11 +2,11 @@
 BGD Property Data Warehouse – Airflow DAG
 ==========================================
 Orchestrates:
-  1. File Sensor  – watches  /opt/airflow/landing for new reference CSVs
-  2. Ingest Ref   – Polars Truncate & Load reference data into Bronze
-  3. Ingest PPD   – Polars incremental (or full) PPD into Bronze
-  4. dbt Silver   – dbt run  --models silver_ppd
-  5. dbt Test     – dbt test --models silver_ppd
+  1. ingest_reference_data  – Polars Truncate & Load reference CSVs into Bronze
+  2. produce_ppd_to_kafka   – Downloads PPD from UK Gov and publishes to Kafka topic `ppd.raw`
+  3. consume_ppd_from_kafka – Reads from `ppd.raw` and bulk-inserts into Bronze via Polars + ADBC
+  4. dbt_run                – dbt run  (all Silver + Gold models)
+  5. dbt_test               – dbt test (data quality constraints)
 
 Trigger from Airflow UI or CLI:
   Full Refresh : airflow dags trigger bgd_pipeline --conf '{"ppd_mode":"full"}'
@@ -33,6 +33,8 @@ DB_URI        = os.environ.get(
     "BRONZE_DB_URI",
     "postgresql://myuser:mypassword@postgres_db:5432/mydatabase",
 )
+KAFKA_DIR     = "/opt/airflow/kafka"
+KAFKA_BROKERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 
 # ── Reference-file → Bronze-table mapping ───────────────────────────
 # Drop a file whose name starts with one of these prefixes into
@@ -137,10 +139,28 @@ with DAG(
         python_callable=ingest_reference_files,
     )
 
-    # 2. PPD incremental (or full) ingestion → Bronze
-    ingest_ppd_task = PythonOperator(
-        task_id="ingest_ppd",
-        python_callable=ingest_ppd,
+    # 2. Publish PPD rows to Kafka topic `ppd.raw`
+    produce_ppd = BashOperator(
+        task_id="produce_ppd_to_kafka",
+        bash_command=(
+            "python {{ params.kafka_dir }}/ppd_producer.py "
+            "--mode {{ dag_run.conf.get('ppd_mode', 'incremental') }}"
+        ),
+        params={"kafka_dir": KAFKA_DIR},
+        env={**os.environ, "KAFKA_BOOTSTRAP_SERVERS": KAFKA_BROKERS},
+    )
+
+    # 3. Consume PPD rows from Kafka and write to Bronze (raw.ppd)
+    consume_ppd = BashOperator(
+        task_id="consume_ppd_from_kafka",
+        bash_command=(
+            "python {{ params.kafka_dir }}/ppd_consumer.py "
+            "--mode {{ dag_run.conf.get('ppd_mode', 'incremental') }}"
+        ),
+        params={"kafka_dir": KAFKA_DIR},
+        env={**os.environ,
+             "KAFKA_BOOTSTRAP_SERVERS": KAFKA_BROKERS,
+             "BRONZE_DB_URI": DB_URI},
     )
 
     # 3. dbt run – All layers (Silver + Gold)
@@ -162,4 +182,4 @@ with DAG(
     )
 
     # ── Task dependencies ───────────────────────────────────────────
-    ingest_ref >> ingest_ppd_task >> dbt_run >> dbt_test
+    ingest_ref >> produce_ppd >> consume_ppd >> dbt_run >> dbt_test

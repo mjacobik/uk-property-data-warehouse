@@ -10,7 +10,7 @@ The primary analytical goal of this data warehouse is to enrich raw UK Property 
 
 ## Architecture Overview
 
-The project follows a **Medallion Architecture** (Bronze → Silver → Gold) orchestrated by **Apache Airflow** and powered by **Polars** for high-speed ingestion. All transformations from Silver onwards are managed by **dbt**.
+The project follows a **Medallion Architecture** (Bronze → Silver → Gold) orchestrated by **Apache Airflow**, powered by **Polars** for high-speed ingestion, and buffered by **Apache Kafka** for decoupled, fault-tolerant streaming of PPD data into the Bronze layer. All transformations from Silver onwards are managed by **dbt**.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -55,23 +55,34 @@ flowchart TD
     subgraph AF ["Airflow DAG: bgd_pipeline — monthly cron"]
         direction TB
         T1["1. ingest_reference_data"]:::airflow
-        T2["2. ingest_ppd"]:::airflow
-        T3["3. dbt run"]:::airflow
-        T4["4. dbt test"]:::airflow
-        T1 --> T2 --> T3 --> T4
+        T2["2. produce_ppd_to_kafka"]:::airflow
+        T3["3. consume_ppd_from_kafka"]:::airflow
+        T4["4. dbt run"]:::airflow
+        T5["5. dbt test"]:::airflow
+        T1 --> T2 --> T3 --> T4 --> T5
+    end
+
+    %% ── Kafka ────────────────────────────────────────────────────────
+    subgraph KF ["Apache Kafka"]
+        direction LR
+        KTopic(["topic: ppd.raw"]):::airflow
     end
 
     %% ── Polars ─────────────────────────────────────────────────────
     subgraph PL ["Processing Engine: Polars"]
         direction LR
         PRef("Truncate & Load"):::polars
-        PPPD("Incremental Append"):::polars
+        PPPD("Kafka Producer"):::polars
+        PCons("Kafka Consumer"):::polars
     end
 
     LAND -.->|Checks for new CSVs| T1
     T1 --> PRef
     GOV -->|HTTP download| T2
     T2 --> PPPD
+    PPPD -->|publishes JSON rows| KTopic
+    KTopic -->|reads batches| T3
+    T3 --> PCons
 
     %% ── PostgreSQL ─────────────────────────────────────────────────
     subgraph DB ["PostgreSQL Data Warehouse"]
@@ -107,7 +118,7 @@ flowchart TD
     PRef -->|ADBC| B_onspd
     PRef -->|ADBC| B_ruc
     PRef -->|ADBC| B_imd
-    PPPD -->|ADBC| B_ppd
+    PCons -->|ADBC| B_ppd
 
     %% Bronze → Silver (all automated by dbt run)
     B_ppd --> S_ppd
@@ -170,8 +181,11 @@ BGD/
 │   ├── 02_onspd.sql
 │   ├── 03_ruc.sql
 │   └── 04_imd.sql
-├── docker-compose.yml                # Postgres + pgAdmin + Airflow
-├── ingest_to_bronze.py               # Polars ingestion script (single entry point)
+├── kafka/
+│   ├── ppd_producer.py               # Polars downloads PPD → publishes to Kafka
+│   └── ppd_consumer.py               # Consumes Kafka topic → bulk inserts via ADBC
+├── docker-compose.yml                # Postgres + pgAdmin + Airflow + Kafka + Zookeeper
+├── ingest_to_bronze.py               # Polars reference data ingestion (landing zone)
 ├── requirements.txt
 ├── ORCHESTRATION_README.md           # Detailed Airflow usage guide
 └── README.md                         # ← You are here
