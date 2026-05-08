@@ -10,31 +10,11 @@ The primary analytical goal of this data warehouse is to enrich raw UK Property 
 
 ## Architecture Overview
 
+![High-Level Overview – How It Works](docs/HLD.png)
+
 The project follows a **Medallion Architecture** (Bronze → Silver → Gold) orchestrated by **Apache Airflow**, powered by **Polars** for high-speed ingestion, and buffered by **Apache Kafka** for decoupled, fault-tolerant streaming of PPD data into the Bronze layer. All transformations from Silver onwards are managed by **dbt**.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Data Sources (UK Gov)                                          │
-│  • PPD  – auto-downloaded by Polars from Land Registry URLs     │
-│  • ONSPD / RUC / IMD – manually dropped into Data/landing/      │
-└──────────┬──────────────────────────────────────────────────────┘
-           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Airflow DAG: bgd_pipeline  (runs 25th of each month)           │
-│                                                                 │
-│  1. ingest_reference_data │ Polars Truncate & Load → Bronze     │
-│  2. produce_ppd_to_kafka  │ Polars + Kafka Producer → ppd.raw   │
-│  3. consume_ppd_from_kafka│ Kafka Consumer → psycopg2 → Bronze  │
-│  4. dbt_run               │ Builds all Silver & Gold dbt models │
-│  5. dbt_test              │ dbt test (checks data quality)      │
-└──────────┬──────────────────────────────────────────────────────┘
-           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  PostgreSQL (Kimball Star Schema)                               │
-│  • dim_geography  • dim_property  • dim_location  • dim_date    │
-│  • fact_sales     • mart_rural_urban_stats                      │
-└─────────────────────────────────────────────────────────────────┘
-```
+![Pipeline Flow – Technologies & Data Flow](docs/data_warehousing_project_diagram.png)
 
 ```mermaid
 flowchart TD
@@ -145,11 +125,8 @@ flowchart TD
     D1 --> M1
 ```
 
-![High-Level Overview – How It Works](docs/HLD.png)
-
 ![Full Architecture – Medallion Stack with Kafka & Airflow](docs/architecture_detailed.png)
 
-![Pipeline Flow – Technologies & Data Flow](docs/data_warehousing_project_diagram.png)
 
 ### Processing Paradigm
 This is a **batch processing** pipeline. The UK Land Registry publishes Price Paid Data updates roughly on the 20th working day of each month. Airflow is scheduled to run on the **25th** as a safe buffer. Reference datasets (ONSPD, RUC, IMD) update infrequently (quarterly/annually) and are loaded via a file-drop landing zone pattern.
