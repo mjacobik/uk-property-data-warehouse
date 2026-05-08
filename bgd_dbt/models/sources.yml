@@ -5,6 +5,11 @@ sources:
     schema: raw
     tables:
       - name: ppd
+        description: "Raw Price Paid Data ingested from HM Land Registry via Kafka consumer."
+        loaded_at_field: _ingested_at
+        freshness:
+          warn_after:  {count: 35, period: day}
+          error_after: {count: 40, period: day}
       - name: onspd
       - name: ruc_lsoa_2021
       - name: imd

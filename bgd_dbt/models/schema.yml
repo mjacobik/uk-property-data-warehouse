@@ -8,6 +8,17 @@ models:
         tests:
           - unique
           - not_null
+      - name: postcode
+        description: "Raw postcode from PPD source; null values are expected for ~0.2% of records"
+        tests:
+          - not_null:
+              config:
+                severity: warn
+      - name: property_type
+        tests:
+          - accepted_values:
+              values: ['D', 'S', 'T', 'F', 'O']
+              quote: true
 
   - name: fact_sales
     description: "Incremental fact table for property sales representing the core of the Gold layer"

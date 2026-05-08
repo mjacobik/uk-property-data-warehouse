@@ -141,7 +141,15 @@ flowchart TD
     F1 -. normalized_postcode .- D4
     F1 --> M1
     D4 --> M1
+    D2 --> M1
+    D1 --> M1
 ```
+
+![High-Level Overview – How It Works](docs/HLD.png)
+
+![Full Architecture – Medallion Stack with Kafka & Airflow](docs/architecture_detailed.png)
+
+![Pipeline Flow – Technologies & Data Flow](docs/data_warehousing_project_diagram.png)
 
 ### Processing Paradigm
 This is a **batch processing** pipeline. The UK Land Registry publishes Price Paid Data updates roughly on the 20th working day of each month. Airflow is scheduled to run on the **25th** as a safe buffer. Reference datasets (ONSPD, RUC, IMD) update infrequently (quarterly/annually) and are loaded via a file-drop landing zone pattern.
@@ -157,7 +165,7 @@ BGD/
 │       └── bgd_pipeline.py          # Airflow DAG (orchestration logic)
 ├── bgd_dbt/
 │   ├── models/
-│   │   ├── schema.yml                # dbt data quality constraints (11 tests)
+│   │   ├── schema.yml                # dbt data quality constraints (15 test assertions)
 │   │   ├── silver/                   # Cleansing & standardization layer
 │   │   │   ├── silver_ppd.sql        # Incremental, unique on transaction_id
 │   │   │   ├── silver_onspd.sql
@@ -182,11 +190,20 @@ BGD/
 │   ├── 02_onspd.sql
 │   ├── 03_ruc.sql
 │   └── 04_imd.sql
+├── docs/
+│   ├── HLD.png                       # High-level overview diagram (executive/newcomer view)
+│   ├── architecture_detailed.png     # Full architecture diagram with all technologies
+│   └── data_warehousing_project_diagram.png  # Pipeline flow diagram (alternative layout)
+├── bgd_dbt/tests/
+│   ├── assert_fact_sales_price_positive.sql  # Validity: price > 0
+│   ├── assert_fact_sales_min_row_count.sql   # Row count: ≥ 29M rows
+│   └── assert_fact_sales_freshness.sql       # Freshness: MAX(transfer_date) < 40 days
 ├── kafka/
 │   ├── ppd_producer.py               # Polars downloads PPD → publishes to Kafka
 │   └── ppd_consumer.py               # Consumes Kafka topic → upserts via psycopg2
 ├── docker-compose.yml                # Postgres + pgAdmin + Airflow + Kafka + Zookeeper
-├── ingest_to_bronze.py               # Polars reference data ingestion (landing zone)
+├── data_product_contract.yaml        # Data Product Contract (ODCS v3.1.0)
+├── ingest_to_bronze.py               # Polars PPD ingestion (Bronze); reference data handled by DAG
 ├── requirements.txt
 ├── ORCHESTRATION_README.md           # Detailed Airflow usage guide
 └── README.md                         # ← You are here
@@ -197,21 +214,43 @@ BGD/
 ## Medallion Layers (dbt)
 
 ### 1. Silver Layer (Staging & Cleansing)
-- **`silver_ppd`**: Normalizes postcodes, uses the Land Registry's natural `transaction_id` UUID as the incremental unique key, runs incrementally (only processes rows with `transfer_date` newer than the current Silver max).
-- **`silver_onspd`**: Deduplicates postcodes, extracts coordinates and LSOA codes (2011 & 2021).
-- **`silver_ruc`**: Standardizes rural/urban classification attributes.
-- **`silver_imd`**: Casts string IMD matrices into numeric scores and deciles.
+- **`silver_ppd`**: Normalizes postcodes (`UPPER(REPLACE(postcode,' ',''))` → `normalized_postcode`), uses the Land Registry's natural `transaction_id` UUID as the incremental unique key. Runs incrementally — only processes rows with `transfer_date` newer than the current Silver max.
+- **`silver_onspd`**: Filters out null postcodes, generates an SCD2-style surrogate key (`onspd_key`) via `MD5(normalized_postcode || dointr)`, converts `dointr`/`doterm` YYYYMM strings to proper `valid_from`/`valid_to` date ranges, and extracts LSOA 2011 & 2021 codes plus WGS84 coordinates.
+- **`silver_ruc`**: Standardizes rural/urban classification attributes — maps raw column names to `lsoa21cd`, `ruc21cd`, `ruc21nm`, `urban_rural_flag`.
+- **`silver_imd`**: Casts all IMD domain scores and deciles from raw string columns into typed `DECIMAL(10,3)` / `INTEGER` values.
 
 ### 2. Gold Layer (Kimball Star Schema)
-- **`dim_geography`**: Joins ONSPD ↔ RUC ↔ IMD via LSOA codes into a single postcode lookup.
-- **`dim_property`**: Unique property type / tenure / new-build combinations.
-- **`dim_location`**: Retains street-level address data (PAON, SAON, street, town, county).
-- **`dim_date`**: Date spine from 1990 to 2030.
-- **`fact_sales`**: Incremental transaction fact with foreign keys to all dimensions.
-- **`mart_rural_urban_stats`**: Pre-aggregated data mart for BI dashboarding.
+- **`dim_geography`**: Joins `silver_onspd` ↔ `silver_ruc` (via `lsoa21cd`) ↔ `silver_imd` (via `lsoa11cd`) into a single postcode lookup with coordinates, RUC classification, and all seven IMD domain scores.
+- **`dim_property`**: Unique property attribute combinations (type, tenure, new-build, category). Surrogate key = `MD5(property_type | new_build | tenure | category_type)`.
+- **`dim_location`**: Street-level address dimension (PAON, SAON, street, locality, town, district, county). Surrogate key = `MD5` over all seven address fields.
+- **`dim_date`**: Date spine from 1990-01-01 to 2030-12-31 with year, quarter, month, day, weekend flag.
+- **`fact_sales`**: Incremental transaction fact keyed on `transaction_id`. Links to `dim_date` via `date_key` (YYYYMMDD int), to `dim_geography` via `normalized_postcode`, and to `dim_property` / `dim_location` via their respective MD5 surrogate keys. Incremental watermark = `silver_updated_at`.
+- **`mart_rural_urban_stats`**: Pre-aggregated mart grouped by `(year, urban_rural_flag, property_type, new_build)` — exposes transaction counts, price stats (avg/min/max/sum), and average IMD, crime, and education scores.
 
 ### 3. Data Quality (dbt test)
-- **Constraints**: Enforces data quality rules via `schema.yml` — `transaction_id` is tested for `unique` and `not_null` in both `silver_ppd` and `fact_sales`. Runs automatically at the end of the Airflow cycle.
+All tests run automatically as the final step of the Airflow DAG (`dbt_test`). 15 total test assertions across schema tests and custom singular tests:
+
+**Schema tests (`schema.yml`):**
+
+| Model | Column | Test | Severity |
+|---|---|---|---|
+| `silver_ppd` | `transaction_id` | unique, not_null | error |
+| `silver_ppd` | `postcode` | not_null | **warn** (source data has ~0.2% nulls) |
+| `silver_ppd` | `property_type` | accepted_values: D, S, T, F, O | error |
+| `fact_sales` | `transaction_id` | unique, not_null | error |
+| `fact_sales` | `location_key` | not_null | error |
+| `fact_sales` | `property_key` | not_null | error |
+| `fact_sales` | `date_key` | not_null | error |
+| `dim_date` | `date_key` | unique, not_null | error |
+| `mart_rural_urban_stats` | `sale_year` | not_null | error |
+
+**Singular tests (`tests/`):**
+
+| Test file | What it checks | Threshold |
+|---|---|---|
+| `assert_fact_sales_price_positive.sql` | No rows in `fact_sales` where `price <= 0` | 0 invalid rows |
+| `assert_fact_sales_min_row_count.sql` | `fact_sales` has at least 29,000,000 rows | ≥ 29M |
+| `assert_fact_sales_freshness.sql` | `MAX(transfer_date)` not older than 40 days | < 40 days |
 
 ---
 
@@ -221,7 +260,7 @@ BGD/
 ```bash
 docker compose up -d
 ```
-This starts **PostgreSQL**, **pgAdmin**, and **Airflow** (webserver + scheduler). On first run, the init scripts in `docker-entrypoint-initdb.d/` bootstrap the Bronze schema and load the historical CSVs.
+This starts **PostgreSQL**, **pgAdmin**, **Airflow** (webserver + scheduler), **Apache Kafka**, and **Zookeeper**. On first run, the init scripts in `docker-entrypoint-initdb.d/` bootstrap the Bronze schema and load the historical CSVs.
 
 | Service       | URL                         | Credentials                    |
 |---------------|-----------------------------|--------------------------------|

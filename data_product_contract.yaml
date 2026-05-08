@@ -1,0 +1,807 @@
+dataContractSpecification: "3.1.0"
+
+# ──────────────────────────────────────────────
+# PRODUCT IDENTITY
+# ──────────────────────────────────────────────
+id: "bgd-uk-property-market-dw"
+name: "UK Property Market Analysis – Data Warehouse"
+version: "1.0.0"
+status: "active"
+
+info:
+  title: "UK Property Market Analysis – Data Warehouse"
+  version: "1.0.0"
+  description: |
+    A Medallion-architecture data warehouse that enriches UK HM Land Registry
+    Price Paid Data (PPD) with granular socio-economic context (Index of Multiple
+    Deprivation – IMD) and geographic classifications (Rural-Urban Classification – RUC).
+    The Gold layer exposes a Kimball star schema and a pre-aggregated reporting mart,
+    enabling analysts to study how property prices, transaction volumes, and deprivation
+    indicators interact across the rural-urban spectrum over time.
+  purpose: |
+    Enable analysts and business users to answer questions such as:
+      - How do property prices and volumes vary across property types,
+        new-builds, and the rural-urban spectrum?
+      - To what extent do neighbourhood deprivation factors (crime, education,
+        living environment) influence housing valuations?
+      - What are long-term trends in property sales when evaluated against
+        neighbourhood quality and geographic density?
+  owner: "Małgorzata Jakubik"
+  contact:
+    name: "Małgorzata Jakubik"
+    url: "https://github.com/mjacobik/BGD"
+  license: "MIT"
+  tags:
+    - uk-property
+    - land-registry
+    - deprivation
+    - rural-urban
+    - kimball
+    - medallion
+
+# ──────────────────────────────────────────────
+# DATA SOURCES
+# ──────────────────────────────────────────────
+sources:
+  - name: "HM Land Registry – Price Paid Data (PPD)"
+    type: "http-download"
+    description: |
+      UK residential property transaction records published monthly by
+      HM Land Registry. Contains sale price, transfer date, property type,
+      tenure, new-build flag, and full address including postcode.
+      Full history available from 1995 onward (30 M+ rows).
+    url: "https://www.gov.uk/government/statistical-data-sets/price-paid-data-downloads"
+    format: "CSV"
+    updateFrequency: "monthly (approx. 20th working day)"
+    license: "Open Government Licence v3.0"
+
+  - name: "ONS Postcode Directory (ONSPD) – February 2026"
+    type: "manual-download"
+    description: |
+      Maps every live and terminated UK postcode to statistical geographies
+      (LSOA 2011 & 2021, MSOA, LAD) and provides WGS84 latitude/longitude.
+      Edition used: February 2026.
+    url: "https://open-geography-portalx-ons.hub.arcgis.com/datasets/ons::ons-postcode-directory-february-2026-for-the-uk/about"
+    format: "CSV"
+    updateFrequency: "quarterly"
+    license: "Open Government Licence v3.0"
+
+  - name: "Rural-Urban Classification 2021 (RUC) – LSOAs in England & Wales"
+    type: "manual-download"
+    description: |
+      ONS classification that assigns each LSOA 2021 a rural-urban category
+      code (ruc21cd) and label (ruc21nm), plus a binary urban_rural_flag.
+    url: "https://www.data.gov.uk/dataset/7f9daee2-ba87-4436-9050-0118a70248c0/rural-urban-classification-2021-of-lsoas-in-ew"
+    format: "CSV"
+    updateFrequency: "decennial (census-aligned)"
+    license: "Open Government Licence v3.0"
+
+  - name: "English Indices of Multiple Deprivation 2019 (IMD)"
+    type: "manual-download"
+    description: |
+      LSOA 2011-level composite deprivation scores and deciles across seven
+      domains: income, employment, education, health, crime, housing barriers,
+      and living environment.
+    url: "https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019"
+    format: "CSV"
+    updateFrequency: "every ~4 years"
+    license: "Open Government Licence v3.0"
+
+# ──────────────────────────────────────────────
+# PIPELINE & REFRESH
+# ──────────────────────────────────────────────
+pipeline:
+  orchestrator: "Apache Airflow 2.x"
+  dagId: "bgd_pipeline"
+  schedule: "0 6 25 * *"  # 06:00 UTC on the 25th of every month
+  description: |
+    1. ingest_reference_data  – Polars reads landing-zone CSVs → raw schema (truncate & load)
+    2. produce_ppd_to_kafka   – Polars downloads PPD from Land Registry → Kafka topic ppd.raw
+    3. consume_ppd_from_kafka – Kafka consumer upserts rows → raw.ppd (psycopg2)
+    4. dbt_run                – Builds all Silver and Gold dbt models
+    5. dbt_test               – Runs dbt data-quality tests
+
+refreshFrequency:
+  ppd: "monthly (triggered on the 25th; PPD is published ~20th working day)"
+  referenceData: "on-demand (drop CSV into Data/landing/ before DAG run)"
+
+# ──────────────────────────────────────────────
+# SCHEMA
+# ──────────────────────────────────────────────
+schema:
+  type: "table"
+  dialect: "PostgreSQL 15"
+
+  datasets:
+
+    # ── BRONZE ──────────────────────────────────
+    - name: "raw.ppd"
+      layer: "bronze"
+      description: "Raw Price Paid Data rows as received from HM Land Registry."
+      columns:
+        - name: transaction_id
+          dataType: TEXT
+          isPrimaryKey: true
+          description: "UUID assigned by HM Land Registry – unique per transaction."
+        - name: price
+          dataType: INTEGER
+          description: "Sale price in GBP."
+        - name: transfer_date
+          dataType: DATE
+          description: "Date the sale was completed."
+        - name: postcode
+          dataType: TEXT
+          description: "UK postcode of the property (may contain spaces / mixed case)."
+        - name: property_type
+          dataType: TEXT
+          description: "D=Detached, S=Semi-Detached, T=Terraced, F=Flats/Maisonettes, O=Other."
+        - name: new_build
+          dataType: BOOLEAN
+          description: "True if the property was a newly built dwelling at time of sale."
+        - name: tenure
+          dataType: TEXT
+          description: "F=Freehold, L=Leasehold."
+        - name: paon
+          dataType: TEXT
+          description: "Primary Addressable Object Name (house number / name)."
+        - name: saon
+          dataType: TEXT
+          description: "Secondary Addressable Object Name (flat / apartment number)."
+        - name: street
+          dataType: TEXT
+          description: "Street name."
+        - name: locality
+          dataType: TEXT
+          description: "Locality (village or hamlet within a town)."
+        - name: town
+          dataType: TEXT
+          description: "Town or city."
+        - name: district
+          dataType: TEXT
+          description: "Local government district."
+        - name: county
+          dataType: TEXT
+          description: "County."
+        - name: category_type
+          dataType: TEXT
+          description: "A=Standard Price Paid, B=Additional Price Paid entry."
+        - name: record_status
+          dataType: TEXT
+          description: "A=Addition, C=Change, D=Delete."
+        - name: _ingested_at
+          dataType: TIMESTAMP
+          description: "Timestamp when the row was ingested into Bronze."
+
+    # ── SILVER ──────────────────────────────────
+    - name: "silver.silver_ppd"
+      layer: "silver"
+      description: |
+        Cleansed and normalised Price Paid Data. Postcodes are uppercased and
+        stripped of spaces. Loaded incrementally by transfer_date.
+      columns:
+        - name: transaction_id
+          dataType: TEXT
+          isPrimaryKey: true
+          description: "Land Registry UUID – unique, not null (dbt-tested)."
+        - name: price
+          dataType: INTEGER
+          description: "Sale price in GBP."
+        - name: transfer_date
+          dataType: DATE
+          description: "Sale completion date."
+        - name: raw_postcode
+          dataType: TEXT
+          description: "Original postcode as supplied by source."
+        - name: normalized_postcode
+          dataType: TEXT
+          description: "UPPER(REPLACE(postcode,' ','')) – used as join key to ONSPD."
+        - name: property_type
+          dataType: TEXT
+          description: "D / S / T / F / O."
+        - name: new_build
+          dataType: BOOLEAN
+          description: "New-build flag."
+        - name: tenure
+          dataType: TEXT
+          description: "F / L."
+        - name: paon
+          dataType: TEXT
+          description: "Primary addressable object name."
+        - name: saon
+          dataType: TEXT
+          description: "Secondary addressable object name."
+        - name: street
+          dataType: TEXT
+          description: "Street name."
+        - name: locality
+          dataType: TEXT
+          description: "Locality."
+        - name: town
+          dataType: TEXT
+          description: "Town or city."
+        - name: district
+          dataType: TEXT
+          description: "District."
+        - name: county
+          dataType: TEXT
+          description: "County."
+        - name: category_type
+          dataType: TEXT
+          description: "A / B."
+        - name: record_status
+          dataType: TEXT
+          description: "A / C / D."
+        - name: dbt_updated_at
+          dataType: TIMESTAMP
+          description: "Timestamp set by dbt at transformation time."
+
+    # ── GOLD – fact ─────────────────────────────
+    - name: "gold.fact_sales"
+      layer: "gold"
+      description: |
+        Central incremental fact table in the Kimball star schema. One row per
+        property transaction. Foreign keys link to all four dimensions.
+      columns:
+        - name: transaction_id
+          dataType: TEXT
+          isPrimaryKey: true
+          description: "Natural key from Land Registry – unique, not null (dbt-tested)."
+        - name: price
+          dataType: INTEGER
+          description: "Sale price in GBP."
+        - name: date_key
+          dataType: INTEGER
+          description: "FK → dim_date.date_key (YYYYMMDD integer). Not null (dbt-tested)."
+        - name: normalized_postcode
+          dataType: TEXT
+          description: "FK → dim_geography.normalized_postcode."
+        - name: property_key
+          dataType: TEXT
+          description: "FK → dim_property.property_key (MD5 surrogate). Not null (dbt-tested)."
+        - name: location_key
+          dataType: TEXT
+          description: "FK → dim_location.location_key (MD5 surrogate). Not null (dbt-tested)."
+        - name: silver_updated_at
+          dataType: TIMESTAMP
+          description: "Propagated dbt_updated_at from Silver (used for incremental watermark)."
+        - name: gold_updated_at
+          dataType: TIMESTAMP
+          description: "Timestamp set by dbt when the Gold row was last written."
+
+    # ── GOLD – dim_date ──────────────────────────
+    - name: "gold.dim_date"
+      layer: "gold"
+      description: "Date spine covering 1990-01-01 to 2030-12-31 (Kimball requirement)."
+      columns:
+        - name: date_key
+          dataType: INTEGER
+          isPrimaryKey: true
+          description: "YYYYMMDD integer – unique, not null (dbt-tested)."
+        - name: full_date
+          dataType: DATE
+          description: "Calendar date."
+        - name: year
+          dataType: INTEGER
+          description: "Four-digit year."
+        - name: quarter
+          dataType: INTEGER
+          description: "1–4."
+        - name: month
+          dataType: INTEGER
+          description: "1–12."
+        - name: month_name
+          dataType: TEXT
+          description: "Full month name (e.g. 'January')."
+        - name: day_of_month
+          dataType: INTEGER
+          description: "1–31."
+        - name: day_of_week
+          dataType: INTEGER
+          description: "ISO day of week: 1=Monday … 7=Sunday."
+        - name: day_name
+          dataType: TEXT
+          description: "Full day name (e.g. 'Monday')."
+        - name: is_weekend
+          dataType: BOOLEAN
+          description: "True if Saturday or Sunday."
+
+    # ── GOLD – dim_property ──────────────────────
+    - name: "gold.dim_property"
+      layer: "gold"
+      description: "Dimension of unique property attribute combinations."
+      columns:
+        - name: property_key
+          dataType: TEXT
+          isPrimaryKey: true
+          description: "MD5 surrogate key over property_type, new_build, tenure, category_type."
+        - name: property_type
+          dataType: TEXT
+          description: "Raw code: D / S / T / F / O."
+        - name: property_type_desc
+          dataType: TEXT
+          description: "Human-readable description (Detached, Semi-Detached, etc.)."
+        - name: new_build
+          dataType: BOOLEAN
+          description: "New-build flag."
+        - name: tenure
+          dataType: TEXT
+          description: "Raw code: F / L."
+        - name: tenure_desc
+          dataType: TEXT
+          description: "Freehold / Leasehold."
+        - name: category_type
+          dataType: TEXT
+          description: "Raw code: A / B."
+        - name: category_type_desc
+          dataType: TEXT
+          description: "Standard Price Paid / Additional Price Paid."
+
+    # ── GOLD – dim_location ──────────────────────
+    - name: "gold.dim_location"
+      layer: "gold"
+      description: "Dimension of unique street-level address combinations."
+      columns:
+        - name: location_key
+          dataType: TEXT
+          isPrimaryKey: true
+          description: "MD5 surrogate key over paon, saon, street, locality, town, district, county."
+        - name: paon
+          dataType: TEXT
+          description: "Primary Addressable Object Name."
+        - name: saon
+          dataType: TEXT
+          description: "Secondary Addressable Object Name."
+        - name: street
+          dataType: TEXT
+          description: "Street name."
+        - name: locality
+          dataType: TEXT
+          description: "Locality."
+        - name: town
+          dataType: TEXT
+          description: "Town or city."
+        - name: district
+          dataType: TEXT
+          description: "Local government district."
+        - name: county
+          dataType: TEXT
+          description: "County."
+
+    # ── GOLD – dim_geography ─────────────────────
+    - name: "gold.dim_geography"
+      layer: "gold"
+      description: |
+        Postcode-level geography dimension joining ONSPD, RUC, and IMD.
+        Provides coordinates, statistical boundaries, rural-urban classification,
+        and deprivation indices for every postcode in the dataset.
+      columns:
+        - name: geography_key
+          dataType: TEXT
+          isPrimaryKey: true
+          description: "Surrogate key from ONSPD (onspd_key)."
+        - name: normalized_postcode
+          dataType: TEXT
+          description: "Postcode join key (no spaces, uppercase)."
+        - name: raw_postcode
+          dataType: TEXT
+          description: "Postcode as held in ONSPD."
+        - name: valid_from
+          dataType: DATE
+          description: "Date from which this postcode record is valid."
+        - name: valid_to
+          dataType: DATE
+          description: "Date until which this postcode record is valid."
+        - name: lsoa21cd
+          dataType: TEXT
+          description: "LSOA 2021 code – join key to RUC."
+        - name: lsoa11cd
+          dataType: TEXT
+          description: "LSOA 2011 code – join key to IMD."
+        - name: msoa21cd
+          dataType: TEXT
+          description: "MSOA 2021 code."
+        - name: lad_code
+          dataType: TEXT
+          description: "Local Authority District code."
+        - name: ruc21cd
+          dataType: TEXT
+          description: "Rural-Urban Classification 2021 code."
+        - name: ruc21nm
+          dataType: TEXT
+          description: "Rural-Urban Classification 2021 label."
+        - name: urban_rural_flag
+          dataType: TEXT
+          description: "'Urban' or 'Rural' – high-level binary classification."
+        - name: imd_score
+          dataType: NUMERIC
+          description: "Overall IMD composite score (higher = more deprived)."
+        - name: imd_decile
+          dataType: INTEGER
+          description: "IMD decile (1=most deprived 10% … 10=least deprived 10%)."
+        - name: income_score
+          dataType: NUMERIC
+          description: "Income deprivation domain score."
+        - name: income_decile
+          dataType: INTEGER
+          description: "Income deprivation decile."
+        - name: employment_score
+          dataType: NUMERIC
+          description: "Employment deprivation domain score."
+        - name: employment_decile
+          dataType: INTEGER
+          description: "Employment deprivation decile."
+        - name: education_score
+          dataType: NUMERIC
+          description: "Education, Skills and Training domain score."
+        - name: education_decile
+          dataType: INTEGER
+          description: "Education deprivation decile."
+        - name: health_score
+          dataType: NUMERIC
+          description: "Health Deprivation and Disability domain score."
+        - name: health_decile
+          dataType: INTEGER
+          description: "Health deprivation decile."
+        - name: crime_score
+          dataType: NUMERIC
+          description: "Crime domain score."
+        - name: crime_decile
+          dataType: INTEGER
+          description: "Crime deprivation decile."
+        - name: housing_barriers_score
+          dataType: NUMERIC
+          description: "Barriers to Housing and Services domain score."
+        - name: housing_barriers_decile
+          dataType: INTEGER
+          description: "Housing barriers deprivation decile."
+        - name: living_environment_score
+          dataType: NUMERIC
+          description: "Living Environment domain score."
+        - name: living_environment_decile
+          dataType: INTEGER
+          description: "Living environment deprivation decile."
+        - name: latitude
+          dataType: NUMERIC
+          description: "WGS84 latitude of postcode centroid."
+        - name: longitude
+          dataType: NUMERIC
+          description: "WGS84 longitude of postcode centroid."
+
+    # ── GOLD – mart_rural_urban_stats ────────────
+    - name: "gold.mart_rural_urban_stats"
+      layer: "gold"
+      description: |
+        Pre-aggregated reporting mart. One row per (year, urban_rural_flag,
+        property_type, new_build) combination. Intended for BI dashboards and
+        quick analytical queries without requiring star-schema joins.
+      columns:
+        - name: sale_year
+          dataType: INTEGER
+          description: "Calendar year of sale (not null – dbt-tested)."
+        - name: urban_rural_flag
+          dataType: TEXT
+          description: "'Urban' or 'Rural'."
+        - name: property_type
+          dataType: TEXT
+          description: "Human-readable property type (from dim_property)."
+        - name: new_build
+          dataType: BOOLEAN
+          description: "New-build flag."
+        - name: total_transactions
+          dataType: INTEGER
+          description: "Count of transactions in the group."
+        - name: total_sales_volume
+          dataType: BIGINT
+          description: "Sum of sale prices (GBP) in the group."
+        - name: average_price
+          dataType: NUMERIC
+          description: "Mean sale price (GBP) in the group."
+        - name: min_price
+          dataType: INTEGER
+          description: "Minimum sale price (GBP) in the group."
+        - name: max_price
+          dataType: INTEGER
+          description: "Maximum sale price (GBP) in the group."
+        - name: avg_imd_score
+          dataType: NUMERIC
+          description: "Average IMD composite score across postcodes in the group."
+        - name: avg_crime_score
+          dataType: NUMERIC
+          description: "Average crime deprivation score across postcodes in the group."
+        - name: avg_education_score
+          dataType: NUMERIC
+          description: "Average education deprivation score across postcodes in the group."
+
+# ──────────────────────────────────────────────
+# ACCESS METHOD
+# ──────────────────────────────────────────────
+access:
+  type: "PostgreSQL"
+  host: "localhost"
+  port: 5432
+  database: "mydatabase"
+  defaultSchema: "gold"
+  notes: |
+    The full stack is deployed via Docker Compose. To connect:
+      1. Run: docker compose up -d
+      2. Connect with any PostgreSQL client:
+           psql -h localhost -p 5432 -U myuser -d mydatabase
+      3. pgAdmin is also available at http://localhost:5050
+           (admin@admin.com / admin)
+    Credentials for local development: user=myuser password=mypassword.
+    Do NOT use these credentials in production.
+  tooling:
+    - name: "pgAdmin"
+      url: "http://localhost:5050"
+      description: "Web-based GUI for browsing tables and running queries."
+    - name: "Airflow UI"
+      url: "http://localhost:8080"
+      description: "Trigger and monitor pipeline runs (admin/admin)."
+
+# ──────────────────────────────────────────────
+# QUALITY METRICS
+# ──────────────────────────────────────────────
+quality:
+  framework: "dbt test (runs automatically as the final Airflow step: dbt_test)"
+  updateCadence: "After every pipeline run (monthly, on the 25th)"
+
+  # ── Automated dbt tests (pass/fail, block pipeline on failure) ──────
+  dbtTests:
+    - model: "silver.silver_ppd"
+      column: "transaction_id"
+      tests: [unique, not_null]
+    - model: "gold.fact_sales"
+      column: "transaction_id"
+      tests: [unique, not_null]
+    - model: "gold.fact_sales"
+      column: "location_key"
+      tests: [not_null]
+    - model: "gold.fact_sales"
+      column: "property_key"
+      tests: [not_null]
+    - model: "gold.fact_sales"
+      column: "date_key"
+      tests: [not_null]
+    - model: "gold.dim_date"
+      column: "date_key"
+      tests: [unique, not_null]
+    - model: "gold.mart_rural_urban_stats"
+      column: "sale_year"
+      tests: [not_null]
+
+  # ── Structured data quality metrics ────────────────────────────────
+  metrics:
+    - id: "M1"
+      name: "Uniqueness of transaction_id"
+      category: "Uniqueness"
+      definition: >
+        Percentage of unique transaction_id values in gold.fact_sales.
+        Each row must represent exactly one Land Registry transaction.
+      calculation: "COUNT(DISTINCT transaction_id) / COUNT(*) * 100"
+      model: "gold.fact_sales"
+      column: "transaction_id"
+      currentValue: "100%"
+      expectedThreshold: "= 100%"
+      updateCadence: "Every pipeline run"
+      enforcedBy: "dbt test: unique"
+
+    - id: "M2"
+      name: "Completeness of postcode"
+      category: "Completeness"
+      definition: >
+        Percentage of rows in raw.ppd where postcode is not null and not empty.
+        Missing postcodes prevent geographic enrichment and break regional analysis.
+      calculation: "COUNT(*) FILTER (WHERE postcode IS NOT NULL AND postcode != '') / COUNT(*) * 100"
+      model: "raw.ppd"
+      column: "postcode"
+      currentValue: "~99.8%"
+      note: "Approx. 50,800 records out of ~30M have missing/invalid postcodes (source: Zad_2_Jakubik.md)"
+      expectedThreshold: "> 99.5%"
+      updateCadence: "Every pipeline run"
+      enforcedBy: "dbt test: not_null (severity: warn) on silver_ppd.postcode — pipeline continues but flags affected rows"
+
+
+
+    - id: "M3"
+      name: "Validity of sale price"
+      category: "Validity"
+      definition: >
+        Percentage of rows in gold.fact_sales where price is a positive integer (> 0).
+        A zero or negative price indicates a data entry error or corrupt record.
+      calculation: "COUNT(*) FILTER (WHERE price > 0) / COUNT(*) * 100"
+      model: "gold.fact_sales"
+      column: "price"
+      currentValue: "~100%"
+      expectedThreshold: "= 100%"
+      updateCadence: "Every pipeline run"
+      enforcedBy: "dbt singular test: assert_fact_sales_price_positive (blocks pipeline on failure)"
+
+    - id: "M4"
+      name: "Consistency of property_type"
+      category: "Consistency"
+      definition: >
+        Percentage of rows in silver.silver_ppd where property_type is one of the
+        five valid Land Registry codes: D, S, T, F, O. Any other value indicates
+        a source data anomaly.
+      calculation: "COUNT(*) FILTER (WHERE property_type IN ('D','S','T','F','O')) / COUNT(*) * 100"
+      model: "silver.silver_ppd"
+      column: "property_type"
+      currentValue: "~100%"
+      expectedThreshold: "= 100%"
+      updateCadence: "Every pipeline run"
+      enforcedBy: "dbt test: accepted_values on silver_ppd.property_type (blocks pipeline on failure)"
+
+    - id: "M5"
+      name: "Row count of fact_sales"
+      category: "Row Count"
+      definition: >
+        Total number of transaction records in gold.fact_sales after each pipeline run.
+        Used to detect unexpected drops (failed ingestion) or unexpected spikes (duplicate loads).
+      calculation: "COUNT(*)"
+      model: "gold.fact_sales"
+      currentValue: "~30,000,000 (full historical load)"
+      expectedThreshold: "> 29,000,000 (full); incremental adds ~80,000–120,000 per month"
+      updateCadence: "Every pipeline run"
+      enforcedBy: "dbt singular test: assert_fact_sales_min_row_count (blocks pipeline on failure)"
+
+    - id: "M6"
+      name: "Data freshness"
+      category: "Freshness"
+      definition: >
+        Time elapsed since the most recent transfer_date in gold.fact_sales.
+        Indicates whether the latest monthly PPD batch was successfully ingested.
+      calculation: "CURRENT_DATE - MAX(transfer_date) FROM gold.fact_sales"
+      model: "gold.fact_sales"
+      column: "transfer_date"
+      currentValue: "< 35 days (pipeline runs on 25th; PPD published ~20th working day)"
+      expectedThreshold: "< 40 days"
+      updateCadence: "Every pipeline run"
+      enforcedBy: "dbt source freshness on raw.ppd._ingested_at (warn >35d, error >40d) + singular test: assert_fact_sales_freshness"
+
+  slaTargets:
+    pipelineCompletionByDayOfMonth: 25
+    maxAcceptableTestFailures: 0
+
+
+# ──────────────────────────────────────────────
+# KNOWN LIMITATIONS
+# ──────────────────────────────────────────────
+limitations:
+  - id: "L1"
+    severity: "medium"
+    description: |
+      England-only coverage for IMD. The Indices of Multiple Deprivation 2019
+      cover English LSOAs only. Welsh, Scottish, and Northern Irish properties
+      will have NULL IMD scores in dim_geography.
+  - id: "L2"
+    severity: "high"
+    description: |
+      IMD vintage mismatch – measured 16% data loss. IMD data is from 2019
+      and keyed on LSOA 2011 boundaries, while RUC uses LSOA 2021 boundaries.
+      The join is bridged via ONSPD's dual LSOA columns (lsoa11cd, lsoa21cd),
+      but approximately 456,000 postcodes still fail to resolve an IMD record.
+  - id: "L3"
+    severity: "high"
+    description: |
+      Missing postcodes in PPD – measured 50,800+ affected transactions.
+      These records produce NULL geography attributes in fact_sales and
+      dim_geography, causing silent data loss in any region-filtered report.
+  - id: "L4"
+    severity: "medium"
+    description: |
+      PPD covers England and Wales only; Scottish and Northern Irish
+      transactions are not included in the Land Registry dataset.
+  - id: "L5"
+    severity: "low"
+    description: |
+      Reference data (ONSPD, RUC, IMD) is loaded via truncate-and-replace.
+      Historical versions are not retained in the warehouse; only the most
+      recently loaded snapshot is available in the Bronze and Silver layers.
+  - id: "L6"
+    severity: "low"
+    description: |
+      Large CSV files (pp-complete.csv ~1 GB, ONSPD ~1 GB) are excluded from
+      the Git repository. Consumers must download them independently from the
+      official government portals listed in the sources section.
+
+# ──────────────────────────────────────────────
+# EXAMPLE USAGE
+# ──────────────────────────────────────────────
+examples:
+  - title: "Average property price by rural/urban classification per year"
+    language: "sql"
+    description: |
+      Uses the pre-aggregated mart for a quick trend analysis.
+      No joins required.
+    code: |
+      SELECT
+          sale_year,
+          urban_rural_flag,
+          property_type,
+          ROUND(average_price::NUMERIC, 0) AS avg_price_gbp,
+          total_transactions
+      FROM gold.mart_rural_urban_stats
+      WHERE sale_year BETWEEN 2010 AND 2023
+        AND urban_rural_flag IS NOT NULL
+      ORDER BY sale_year, urban_rural_flag, property_type;
+
+  - title: "Top 10 most deprived areas by average sale price (star schema join)"
+    language: "sql"
+    description: |
+      Joins fact_sales to dim_geography to analyse the relationship between
+      deprivation rank and property value. Uses the Kimball star schema directly.
+    code: |
+      SELECT
+          g.lad_code,
+          g.ruc21nm,
+          ROUND(AVG(g.imd_score)::NUMERIC, 2)   AS avg_imd_score,
+          ROUND(AVG(f.price)::NUMERIC, 0)        AS avg_sale_price_gbp,
+          COUNT(f.transaction_id)                AS num_transactions
+      FROM gold.fact_sales f
+      JOIN gold.dim_geography g
+          ON f.normalized_postcode = g.normalized_postcode
+      JOIN gold.dim_date d
+          ON f.date_key = d.date_key
+         AND d.full_date BETWEEN g.valid_from AND g.valid_to
+      WHERE d.year = 2022
+        AND g.imd_decile <= 2          -- Most deprived 20 %
+      GROUP BY g.lad_code, g.ruc21nm
+      ORDER BY avg_imd_score DESC
+      LIMIT 10;
+
+  - title: "Filter Detached Freehold new-builds sold in 2023"
+    language: "sql"
+    description: |
+      Demonstrates joining fact_sales to dim_property and dim_date.
+    code: |
+      SELECT
+          f.transaction_id,
+          f.price,
+          d.full_date AS sale_date,
+          p.property_type_desc,
+          p.tenure_desc
+      FROM gold.fact_sales    f
+      JOIN gold.dim_date      d  ON f.date_key     = d.date_key
+      JOIN gold.dim_property  p  ON f.property_key = p.property_key
+      WHERE d.year             = 2023
+        AND p.property_type_desc = 'Detached'
+        AND p.tenure_desc        = 'Freehold'
+        AND p.new_build          = TRUE
+      ORDER BY f.price DESC
+      LIMIT 50;
+
+  - title: "Connect and query with Python (psycopg2)"
+    language: "python"
+    description: |
+      Minimal Python snippet to connect to the local Docker PostgreSQL
+      instance and pull the mart into a pandas DataFrame.
+    code: |
+      import psycopg2
+      import pandas as pd
+
+      conn = psycopg2.connect(
+          host="localhost",
+          port=5432,
+          dbname="mydatabase",
+          user="myuser",
+          password="mypassword",
+      )
+
+      query = """
+          SELECT
+              sale_year,
+              urban_rural_flag,
+              property_type,
+              ROUND(average_price::NUMERIC, 0) AS avg_price_gbp,
+              total_transactions
+          FROM gold.mart_rural_urban_stats
+          WHERE sale_year >= 2015
+          ORDER BY sale_year, urban_rural_flag;
+      """
+
+      df = pd.read_sql(query, conn)
+      conn.close()
+
+      print(df.head(20))
+      # Further analysis:
+      # df.groupby(["urban_rural_flag", "property_type"])["avg_price_gbp"].mean()
