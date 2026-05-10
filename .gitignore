@@ -1,5 +1,10 @@
-# Data (large CSVs – not tracked by Git)
-Data/
+# Data (large raw files – not tracked by Git)
+Data/landing/
+Data/*.csv
+Data/ONSPD*/
+# Allow the pre-exported mart snapshot to be tracked
+!Data/exports/
+!Data/exports/*.csv
 
 # dbt build artifacts
 bgd_dbt/target/

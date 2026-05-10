@@ -29,7 +29,7 @@ info:
   owner: "Małgorzata Jakubik"
   contact:
     name: "Małgorzata Jakubik"
-    url: "https://github.com/mjacobik/BGD"
+    url: "https://github.com/mjacobik/uk-property-data-warehouse"
   license: "MIT"
   tags:
     - uk-property
@@ -537,6 +537,20 @@ access:
     - name: "Airflow UI"
       url: "http://localhost:8080"
       description: "Trigger and monitor pipeline runs (admin/admin)."
+  staticExport:
+    description: |
+      A pre-exported CSV snapshot of the primary reporting mart is available
+      in the repository for consumers who do not wish to run the full pipeline.
+      The snapshot was generated from a full historical load (PPD 1995 – present).
+    file: "Data/exports/mart_rural_urban_stats.csv"
+    table: "gold.mart_rural_urban_stats"
+    rows: 901
+    sizeKB: 109
+    exportedAt: "2026-05-10"
+    columns: >
+      sale_year, urban_rural_flag, property_type, new_build,
+      total_transactions, total_sales_volume, average_price,
+      min_price, max_price, avg_imd_score, avg_crime_score, avg_education_score
 
 # ──────────────────────────────────────────────
 # QUALITY METRICS

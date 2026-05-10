@@ -159,6 +159,8 @@ BGD/
 │   └── dbt_project.yml
 ├── Data/
 │   ├── landing/                      # Drop reference CSVs here for Airflow
+│   ├── exports/
+│   │   └── mart_rural_urban_stats.csv    # Pre-exported Gold mart snapshot (901 rows, 109 KB)
 │   ├── pp-complete.csv               # 30M+ row PPD history (not in Git)
 │   └── ONSPD_FEB_2026/              # ONS Postcode Directory (not in Git)
 ├── docker-entrypoint-initdb.d/       # Bootstrap scripts (first-run schema + data)
@@ -228,6 +230,32 @@ All tests run automatically as the final step of the Airflow DAG (`dbt_test`). 1
 | `assert_fact_sales_price_positive.sql` | No rows in `fact_sales` where `price <= 0` | 0 invalid rows |
 | `assert_fact_sales_min_row_count.sql` | `fact_sales` has at least 29,000,000 rows | ≥ 29M |
 | `assert_fact_sales_freshness.sql` | `MAX(transfer_date)` not older than 40 days | < 40 days |
+
+---
+
+## Quick Access (no pipeline required)
+
+A pre-exported CSV snapshot of the primary reporting mart is committed directly to the repository.
+No Docker, no Airflow, no database needed — just download and analyse:
+
+```
+Data/exports/mart_rural_urban_stats.csv
+```
+
+| Property | Value |
+|---|---|
+| Table | `gold.mart_rural_urban_stats` |
+| Rows | 901 |
+| Size | 109 KB |
+| Exported | 2026-05-10 (full historical load, PPD 1995–present) |
+| Columns | `sale_year`, `urban_rural_flag`, `property_type`, `new_build`, `total_transactions`, `total_sales_volume`, `average_price`, `min_price`, `max_price`, `avg_imd_score`, `avg_crime_score`, `avg_education_score` |
+
+**Load in Python:**
+```python
+import pandas as pd
+df = pd.read_csv("Data/exports/mart_rural_urban_stats.csv")
+print(df.head())
+```
 
 ---
 
